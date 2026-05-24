@@ -22,7 +22,7 @@ const CONFIG = {
 
   // ---- DataPipe / OSF ----
   // Paste the Experiment ID from your DataPipe dashboard here (see README §11).
-  datapipe_experiment_id: "REPLACE_WITH_YOUR_DATAPIPE_ID"
+  datapipe_experiment_id: "y60zFSDsto4Z"
 };
 
 /* ------------------------- jsPsych setup -------------------------- */
