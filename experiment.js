@@ -1,27 +1,43 @@
 /* =====================================================================
-   experiment.js  —  Temporal Schema Habituation & Adaptive Binding
+   experiment.js  —  Schema Habituation & Event-Order Binding
    Computational Cognition Laboratory, Krea University
-   Engine for the proposal by Catherine Jaison (supervisor: R. Sengupta)
+   Engine for the Stage 1 Registered Report
+   (Catherine Jaison, first author; supervisor: R. Sengupta)
 
    You normally do NOT need to edit this file to change materials —
-   edit stimuli.js instead. Things you MIGHT tune here are grouped in
-   the CONFIG block immediately below.
+   edit stimuli.js instead. Tunables are in the CONFIG block below.
+
+   This engine implements the REGISTERED design:
+     - Phase 1: 24 congruent habituation stories; reading time recorded at
+       all three sentence positions (needed for the position-graded H1 test
+       that dissociates schema learning from generic motor speed-up).
+     - Phase 2: 32 analysed test stories (16 congruent + 16 oddball per
+       participant) in four counterbalancing sets A-D, plus 2 dedicated
+       attention checks (34 test trials total). Order probe is fixed per
+       frame: S2-S3 (critical, 24 frames) or S1-S2 (control, 8 frames);
+       the distant S1-S3 pair is not used.
    ===================================================================== */
 
 /* ----------------------------- CONFIG ----------------------------- */
 const CONFIG = {
   fixation_ms: 500,
-  isi_min_ms: 400,          // jittered inter-sentence interval
+  isi_min_ms: 400,            // jittered inter-sentence interval
   isi_max_ms: 900,
-  iti_min_ms: 1000,         // jittered inter-trial interval
+  iti_min_ms: 1000,           // jittered inter-trial interval
   iti_max_ms: 1500,
-  reading_floor_ms: 1500,   // total story RT below this is flagged (§4.9)
-  sentence_ceiling_ms: 10000, // any single sentence RT above this is excluded (§5.1)
-  confidence_labels: ["Guess", "Low", "Medium", "High"],
-  pairs: ["S1-S2", "S2-S3", "S1-S3"],
 
-  // ---- DataPipe / OSF ----
-  // Paste the Experiment ID from your DataPipe dashboard here (see README §11).
+  // ---- reading-quality screens (RR Analysis Plan) ----
+  per_word_floor_ms: 150,     // mean reading rate faster than this (ms/word) = skim flag
+  anticipatory_floor_ms: 200, // any single-sentence RT below this = anticipatory key-press
+  sentence_ceiling_ms: 10000, // any single-sentence RT above this is flagged
+
+  confidence_labels: ["Guess", "Low", "Medium", "High"],
+  pairs: ["S2-S3", "S1-S2"],  // S1-S3 dropped in the registered design
+
+  // expected registered counts (used by the design-integrity check only)
+  expected: { sets: 4, frames_per_set: 8, s2s3: 24, s1s2: 8, attention_checks: 2 },
+
+  // ---- DataPipe / OSF ----  *** DO NOT CHANGE THIS ID ***
   datapipe_experiment_id: "y60zFSDsto4Z"
 };
 
@@ -46,7 +62,7 @@ const SAVE_ENABLED = (jsPsych.data.getURLVariable("save") !== "off") &&
   CONFIG.datapipe_experiment_id.indexOf("REPLACE") === -1;
 
 const SUBJECT_ID = urlSubject || makeSubjectId();
-// 4 counterbalancing groups (proposal §4.6). One full block = 4 participants.
+// 4 counterbalancing groups (RR Table 1). One full block = 4 participants.
 const GROUP = (urlGroup >= 1 && urlGroup <= 4) ? urlGroup
             : jsPsych.randomization.randomInt(1, 4);
 
@@ -54,7 +70,7 @@ jsPsych.data.addProperties({
   subject_id: SUBJECT_ID,
   cb_group: GROUP,
   experiment: "temporal_schema_habituation",
-  version: "1.0"
+  version: "2.0"
 });
 
 /* --------------------------- helpers ------------------------------ */
@@ -80,6 +96,36 @@ function constrainedShuffle(arr, key, windowSize = 3, tries = 3000) {
     if (ok) return s;
   }
   return jsPsych.randomization.shuffle(arr); // fallback
+}
+
+// balanced left/right flags within a participant (~50/50)
+function sideBalancedFlags(n) {
+  const flags = [];
+  for (let i = 0; i < n; i++) flags.push(i < Math.ceil(n / 2));
+  return jsPsych.randomization.shuffle(flags);
+}
+
+/* ---------------- design-integrity check (console only) ----------- */
+function validateDesign() {
+  const t = (window.STIMULI && STIMULI.test) || [];
+  const bySet = { A: 0, B: 0, C: 0, D: 0 };
+  let s2s3 = 0, s1s2 = 0, bad = 0;
+  t.forEach(f => {
+    if (bySet[f.set] === undefined) bad++; else bySet[f.set]++;
+    if (f.probe_pair === "S2-S3") s2s3++;
+    else if (f.probe_pair === "S1-S2") s1s2++;
+    else bad++;
+  });
+  const ac = (STIMULI.attention_checks || []).length;
+  const e = CONFIG.expected, msgs = [];
+  if (t.length !== e.sets * e.frames_per_set) msgs.push(`test frames = ${t.length}, expected ${e.sets * e.frames_per_set}`);
+  if (s2s3 !== e.s2s3) msgs.push(`S2-S3 frames = ${s2s3}, expected ${e.s2s3}`);
+  if (s1s2 !== e.s1s2) msgs.push(`S1-S2 frames = ${s1s2}, expected ${e.s1s2}`);
+  ["A", "B", "C", "D"].forEach(k => { if (bySet[k] !== e.frames_per_set) msgs.push(`set ${k} has ${bySet[k]} frames, expected ${e.frames_per_set}`); });
+  if (ac !== e.attention_checks) msgs.push(`attention checks = ${ac}, expected ${e.attention_checks}`);
+  if (bad) msgs.push(`${bad} frame(s) with missing/invalid set or probe_pair`);
+  if (msgs.length) console.warn("[design check] Registered-design mismatch:\n- " + msgs.join("\n- "));
+  else console.info("[design check] OK — 32 analysed frames (24 S2-S3 + 8 S1-S2) across sets A-D, plus 2 attention checks.");
 }
 
 /* ---------------------- trial constructors ----------------------- */
@@ -110,7 +156,7 @@ function readTrial(text, dataObj) {
   };
 }
 
-/* one self-paced 3-sentence story (used in both phases) */
+/* one self-paced 3-sentence story (records RT at each position) */
 function storyReadingTimeline(sentences, baseData) {
   const tl = [fixation()];
   sentences.forEach((sent, idx) => {
@@ -127,12 +173,11 @@ function orderAndConfidence(story) {
   const s = [story.s1, story.s2, story.s3]; // s[0..2]
   let aIdx, bIdx;                            // indices of the two probed sentences
   if (story.pair === "S1-S2") { aIdx = 0; bIdx = 1; }
-  else if (story.pair === "S2-S3") { aIdx = 1; bIdx = 2; }
-  else { aIdx = 0; bIdx = 2; }               // S1-S3
+  else { aIdx = 1; bIdx = 2; }               // "S2-S3" (the only other registered pair)
   const earlierIdx = Math.min(aIdx, bIdx);
   const laterIdx = Math.max(aIdx, bIdx);
 
-  // place earlier event on left or right (counterbalanced)
+  // place earlier event on left or right (counterbalanced within participant)
   const earlierOnLeft = story.placeEarlierLeft;
   const leftText  = earlierOnLeft ? s[earlierIdx] : s[laterIdx];
   const rightText = earlierOnLeft ? s[laterIdx]  : s[earlierIdx];
@@ -143,6 +188,7 @@ function orderAndConfidence(story) {
     story_id: story.id,
     domain: story.domain,
     condition: story.condition,
+    cb_set: story.cb_set,
     pair_tested: story.pair,
     earlier_on_left: earlierOnLeft ? 1 : 0,
     correct_response: correctResponse,
@@ -168,6 +214,7 @@ function orderAndConfidence(story) {
       task: "confidence",
       story_id: story.id,
       condition: story.condition,
+      pair_tested: story.pair,
       is_attention_check: story.is_attention_check ? 1 : 0
     },
     on_finish: (d) => {
@@ -197,6 +244,7 @@ function buildHabituation() {
       habituation_index: i + 1,   // 1..24 — used for the habituation curve (H1)
       test_index: null,
       pair_tested: null,
+      cb_set: null,
       is_attention_check: 0
     };
     tl.push(...storyReadingTimeline([story.s1, story.s2, story.s3], base));
@@ -205,39 +253,45 @@ function buildHabituation() {
   return tl;
 }
 
-// Phase 2: 16 frames -> 8 congruent + 8 oddball, with pair & side counterbalancing
+// Phase 2: 32 analysed frames (sets A-D rotated per group) + 2 attention checks.
+// Counterbalancing (RR Table 1): which whole sets are shown congruent vs oddball.
 function buildTest() {
-  const frames = STIMULI.test.slice(); // fixed order 0..15
-  const setRotateA = (GROUP === 1 || GROUP === 2); // first half congruent for groups 1,2
-  const acIds = STIMULI.attention_check_ids || [];
+  const ROT = {
+    1: { A: "cong", B: "cong", C: "odd",  D: "odd"  },
+    2: { A: "odd",  B: "odd",  C: "cong", D: "cong" },
+    3: { A: "cong", B: "odd",  C: "odd",  D: "cong" },
+    4: { A: "odd",  B: "cong", C: "cong", D: "odd"  }
+  }[GROUP];
 
-  let prepared = frames.map((f, i) => {
-    const inFirstHalf = i < 8;
-    const condition = setRotateA
-      ? (inFirstHalf ? "cong" : "odd")
-      : (inFirstHalf ? "odd"  : "cong");
-    const s3 = condition === "cong" ? f.s3_congruent : f.s3_oddball;
-
-    const isAC = acIds.indexOf(f.id) !== -1;
-    // attention-check frames: replace S3 with the instruction; force a non-S3 pair
-    const pair = isAC ? "S1-S2" : CONFIG.pairs[(i + (GROUP - 1)) % 3];
-    const placeEarlierLeft = ((i + GROUP) % 2) === 0;
-
+  const analysed = STIMULI.test.map(f => {
+    const condition = ROT[f.set] || "cong";
+    const s3 = (condition === "cong") ? f.s3_congruent : f.s3_oddball;
     return {
-      id: f.id,
-      domain: f.domain,
-      s1: f.s1,
-      s2: f.s2,
-      s3: isAC ? STIMULI.attention_check_sentence : s3,
+      id: f.id, domain: f.domain, s1: f.s1, s2: f.s2, s3: s3,
       condition: condition,
-      oddball_type: condition === "odd" ? (f.oddball_type || "NA") : "NA",
-      pair: pair,
-      placeEarlierLeft: placeEarlierLeft,
-      is_attention_check: isAC
+      oddball_type: (condition === "odd") ? (f.oddball_type || "setting_state") : "NA",
+      pair: f.probe_pair,            // fixed per frame: "S2-S3" or "S1-S2"
+      cb_set: f.set,
+      is_attention_check: false
     };
   });
 
-  prepared = jsPsych.randomization.shuffle(prepared); // intermix cong/odd (§4.4)
+  const acFrames = (STIMULI.attention_checks || []).map(f => ({
+    id: f.id, domain: f.domain, s1: f.s1, s2: f.s2,
+    s3: STIMULI.attention_check_sentence,
+    condition: "ac",
+    oddball_type: "NA",
+    pair: "S1-S2",                   // S3 is replaced, so probe an earlier pair
+    cb_set: "AC",
+    is_attention_check: true
+  }));
+
+  let prepared = analysed.concat(acFrames);
+  prepared = jsPsych.randomization.shuffle(prepared); // intermix cong/odd/AC
+
+  // balanced left/right placement within participant
+  const sides = sideBalancedFlags(prepared.length);
+  prepared.forEach((story, i) => { story.placeEarlierLeft = sides[i]; });
 
   const tl = [];
   prepared.forEach((story, i) => {
@@ -247,6 +301,7 @@ function buildTest() {
       domain: story.domain,
       condition: story.condition,
       oddball_type: story.oddball_type,
+      cb_set: story.cb_set,
       habituation_index: null,
       test_index: i + 1,
       pair_tested: story.pair,
@@ -286,7 +341,7 @@ const consent = {
          own pace, pressing the space bar to move from one sentence to the
          next. For some stories you will then answer a brief question about the
          order of events and rate how confident you are. The session takes about
-         <b>30&ndash;35 minutes</b>.</p>
+         <b>35&ndash;40 minutes</b>.</p>
 
       <h3>Risks and benefits</h3>
       <p>There are no anticipated risks beyond those of ordinary computer use.
@@ -345,7 +400,7 @@ const phase2Instructions = infoScreen(`
   <p>Answer based only on the story you have just read. There is no time limit on
      the question.</p>`);
 
-/* ------------------ demographics + awareness (§4.9) ---------------- */
+/* ------------------ demographics + awareness ---------------------- */
 const awarenessAndDemographics = {
   type: jsPsychSurveyHtmlForm,
   preamble: `<div class="textpage"><h2>Almost done</h2>
@@ -379,12 +434,16 @@ const awarenessAndDemographics = {
       <label>5. Is English your first / native language?</label><br>
       <label class="inline"><input type="radio" name="native_en" value="yes" required> Yes</label>
       <label class="inline"><input type="radio" name="native_en" value="no"> No</label>
+    </div>
+    <div class="form-block">
+      <label>6. What is your first / native language?</label>
+      <input name="first_language" type="text" placeholder="e.g. Telugu, Tamil, Hindi, English..." style="width:240px;">
     </div>`,
   button_label: "Finish",
   data: { task: "demographics" }
 };
 
-/* ------------------ DataPipe upload to OSF (§11 of README) --------- */
+/* ------------------ DataPipe upload to OSF ------------------------ */
 const OSF_FILENAME = `temporal_schema_${SUBJECT_ID}_g${GROUP}.csv`;
 
 const saveToOSF = {
@@ -396,6 +455,8 @@ const saveToOSF = {
 };
 
 /* --------------------------- timeline ---------------------------- */
+validateDesign(); // logs a console warning if materials don't match the registered counts
+
 const timeline = [];
 timeline.push(consent);
 timeline.push(welcome);
@@ -415,6 +476,8 @@ jsPsych.run(timeline);
 
 /* =====================================================================
    DATA EXPORT + LIVE DESCRIPTIVE SUMMARY (shown at the very end)
+   The summary is a per-participant sanity check only — never a result.
+   The confirmatory analysis runs in R on the pooled OSF data.
    ===================================================================== */
 function triggerDownload(filename, text) {
   const blob = new Blob([text], { type: "text/csv;charset=utf-8;" });
@@ -435,6 +498,7 @@ function olsSlope(xs, ys) {
   return den === 0 ? NaN : num / den;
 }
 const r2 = (x) => Number.isFinite(x) ? Math.round(x * 100) / 100 : "NA";
+const wordCount = (t) => t ? t.trim().split(/\s+/).length : 0;
 
 function computeSummary() {
   const all = jsPsych.data.get();
@@ -442,26 +506,35 @@ function computeSummary() {
   const orders = all.filter({ task: "order" }).values();
   const confs = all.filter({ task: "confidence" }).values();
 
-  // ---- per-story total reading time + reading-floor flag ----
-  const storyTotals = {}; // key: phase|story|test_index
+  // ---- per-story reading rate + reading-quality flags (per-word floor) ----
+  const storyRT = {}, storyWords = {};
   reads.forEach(r => {
     const key = r.phase + "|" + r.story_id + "|" + (r.test_index ?? r.habituation_index);
-    storyTotals[key] = (storyTotals[key] || 0) + (r.rt || 0);
+    storyRT[key] = (storyRT[key] || 0) + (r.rt || 0);
+    storyWords[key] = (storyWords[key] || 0) + wordCount(r.sentence_text);
   });
-  const flooredStories = Object.values(storyTotals).filter(t => t < CONFIG.reading_floor_ms).length;
+  let flooredStories = 0;
+  Object.keys(storyRT).forEach(k => {
+    const w = storyWords[k] || 1;
+    if ((storyRT[k] / w) < CONFIG.per_word_floor_ms) flooredStories++;
+  });
+  const anticipatory = reads.filter(r => (r.rt || 0) < CONFIG.anticipatory_floor_ms).length;
+  const overCeiling = reads.filter(r => (r.rt || 0) > CONFIG.sentence_ceiling_ms).length;
 
-  // ---- habituation curve (H1): S3 RT vs trial index ----
+  // ---- H1 position-graded habituation: slope of RT vs trial at each position
+  const habSlopeAtPos = (pos) => {
+    const rows = reads.filter(r => r.phase === "habituation" && r.sentence_pos === pos);
+    return olsSlope(rows.map(r => r.habituation_index), rows.map(r => r.rt));
+  };
   const habS3 = reads.filter(r => r.phase === "habituation" && r.sentence_pos === 3);
-  const habX = habS3.map(r => r.habituation_index);
   const habY = habS3.map(r => r.rt);
-  const habSlope = olsSlope(habX, habY);
 
   // ---- H2: test S3 reading time by condition (exclude attention checks) ----
   const testS3 = reads.filter(r => r.phase === "test" && r.sentence_pos === 3 && r.is_attention_check !== 1);
   const rtCong = testS3.filter(r => r.condition === "cong").map(r => r.rt);
   const rtOdd  = testS3.filter(r => r.condition === "odd").map(r => r.rt);
 
-  // ---- H3: order accuracy by condition (and by condition x pair) ----
+  // ---- H3: order accuracy by condition and by condition x pair ----
   const realOrders = orders.filter(o => o.is_attention_check !== 1);
   const accBy = (cond) => {
     const v = realOrders.filter(o => o.condition === cond).map(o => o.order_correct);
@@ -489,13 +562,16 @@ function computeSummary() {
   L.push(["subject_id", SUBJECT_ID]);
   L.push(["cb_group", GROUP]);
   L.push(["n_read_trials", reads.length]);
-  L.push(["n_stories_total", Object.keys(storyTotals).length]);
-  L.push(["n_stories_below_reading_floor", flooredStories]);
+  L.push(["n_stories_total", Object.keys(storyRT).length]);
+  L.push(["n_stories_below_perword_floor", flooredStories]);
+  L.push(["n_sentences_anticipatory_lt200ms", anticipatory]);
+  L.push(["n_sentences_over_ceiling", overCeiling]);
   L.push(["attention_checks_total", acRows.length]);
   L.push(["attention_checks_passed", acPassed]);
-  L.push(["--- H1 habituation curve ---", ""]);
-  L.push(["hab_S3_mean_rt_ms", r2(mean(habY))]);
-  L.push(["hab_S3_rt_slope_ms_per_trial", r2(habSlope)]);
+  L.push(["--- H1 position-graded habituation (RT~trial slope, ms/trial) ---", ""]);
+  L.push(["hab_slope_S1", r2(habSlopeAtPos(1))]);
+  L.push(["hab_slope_S2", r2(habSlopeAtPos(2))]);
+  L.push(["hab_slope_S3 (should be most negative)", r2(habSlopeAtPos(3))]);
   L.push(["hab_S3_first6_mean_ms", r2(mean(habY.slice(0, 6)))]);
   L.push(["hab_S3_last6_mean_ms", r2(mean(habY.slice(-6)))]);
   L.push(["--- H2 violation cost (test S3 RT) ---", ""]);
@@ -503,20 +579,18 @@ function computeSummary() {
   L.push(["test_S3_rt_oddball_ms", r2(mean(rtOdd))]);
   L.push(["test_S3_oddball_minus_congruent_ms", r2(mean(rtOdd) - mean(rtCong))]);
   L.push(["--- H3 order memory accuracy ---", ""]);
-  L.push(["order_acc_congruent", r2(accBy("cong"))]);
-  L.push(["order_acc_oddball", r2(accBy("odd"))]);
+  L.push(["order_acc_congruent_overall", r2(accBy("cong"))]);
+  L.push(["order_acc_oddball_overall", r2(accBy("odd"))]);
   CONFIG.pairs.forEach(p => {
     const c = accByPair("cong", p), o = accByPair("odd", p);
     L.push([`order_acc_cong_${p} (n=${c.n})`, r2(c.acc)]);
     L.push([`order_acc_odd_${p} (n=${o.n})`, r2(o.acc)]);
   });
-  L.push(["--- H4 confidence ---", ""]);
-  L.push(["confidence_congruent_1to4", r2(confCond("cong"))]);
-  L.push(["confidence_oddball_1to4", r2(confCond("odd"))]);
+  L.push(["--- H4 confidence (1=Guess .. 4=High) ---", ""]);
+  L.push(["confidence_congruent", r2(confCond("cong"))]);
+  L.push(["confidence_oddball", r2(confCond("odd"))]);
 
   const csv = L.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
-
-  // small HTML preview table
   const previewRows = L.map(r =>
     `<tr><td>${r[0]}</td><td style="text-align:right;">${r[1]}</td></tr>`
   ).join("");
@@ -549,7 +623,7 @@ function showCompletionScreen() {
       <div id="summary-preview" class="summary-preview" style="display:none;">
         <h3>Quick descriptive summary (this participant only)</h3>
         <p class="note">For a sanity check only &mdash; the real analysis runs in R on the pooled,
-          de-identified data (proposal §5).</p>
+          de-identified data.</p>
         <table class="summary-table">${previewRows}</table>
       </div>
 
@@ -563,8 +637,6 @@ function showCompletionScreen() {
     el.style.display = (el.style.display === "none") ? "block" : "none";
   };
 
-  // In local-test mode, auto-offer the raw file. For real participants the data
-  // are already on OSF, so we don't push a download at them (buttons stay available).
   if (!SAVE_ENABLED) {
     try { triggerDownload(rawName, rawCsv); } catch (e) { /* fall back to button */ }
   }
